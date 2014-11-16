@@ -3,7 +3,9 @@ from random import random
 from graphics import *
 from roomba import *
 from spike import *
+from UAV import *
 from vector import *
+from timeMultiplier import *
 import time
 
 class Board:
@@ -13,20 +15,30 @@ class Board:
         self.height = height    # width of board in meters
         self.rC = []            # roomba list
         self.srC = []           # spike roomba list
+        self.boardTime = TimeMultiplier(3)
         pixelspermeter = 30     # number of pixels per meter
+        theta = 2*pi/rCount
+        boardCenter = (width/2)*pixelspermeter+25
         for x in range(rCount): # initialize roombas
-            randnum1 = random()
-            pos = Vector(50 + 30 * x, 50 + 30 * x, 0)                   # put roombas in diagonal
-            # pos = Vector(50 + randnum1 * 550, 50 + randnum1 * 550, 0)   # random x and y positions within active part of board
-            vel = Vector(cos(randnum1*2*pi), sin(randnum1*2*pi), 0)     # random velocities (magnitude 1 m/s)
-            rCircle = Circle(Point(pos.x, pos.y), 9/2)                  # creating circle object for roomba
-            self.rC.append(Roomba(pos, vel, rCircle))                   # add new Roomba object to list
+            pos = Vector(boardCenter + 30*sin(theta*x), boardCenter + 30*cos(theta*x), 0)                   # put roombas in diagonal
+            vel = Vector(sin(theta*x)/3, cos(theta*x)/3, 0)                # random velocities (magnitude 1 m/s)
+            rCircle = Circle(Point(pos.x, pos.y), 9.0/2)                   # creating circle object for roomba
+            #rLine = Line()
+            self.rC.append(Roomba(pos, vel, rCircle,self.boardTime))       # add new Roomba object to list
         for i in range(sCount): # initialize spike roombas at theta = 0, pi/2, pi, and 3pi/2
             pos = Vector(30 * width / 2 + 25 + cos(i*pi/2) * 5 * 30,30 * height / 2 + 25 + sin(i*pi/2) * 5 * 30, 0) 
-            vel = Vector(-sin(i*pi/2), cos(i*pi/2), 0)
-            rCircle = Circle(Point(pos.x, pos.y), 9/2)                  # creating spike roomba circle object
-            self.srC.append(Spike(pos, vel, rCircle, i))                   # add new Spike object to list
-        self.rsrC = self.rC + self.srC                                  # new list w/ all types of roombas
+            vel = Vector(-sin(i*pi/2)/3, cos(i*pi/2)/3, 0)
+            rCircle = Circle(Point(pos.x, pos.y), 9.0/2)                   # creating spike roomba circle object
+            self.srC.append(Spike(pos, vel, rCircle, i, self.boardTime))   # add new Spike object to list
+        self.rCsrC = self.rC + self.srC
+
+        #UAV initialization
+        pos = Vector(boardCenter,boardCenter,0)
+        vel = Vector(0,0,0)
+        rCircle = Circle(Point(pos.x,pos.y), 6.0)
+        maxSpeed = 2            # in m/s
+        self.uav = UAV(pos, vel, rCircle, maxSpeed, self.boardTime, self.rC, self.srC)       
+
             
     # Draws the board and roombas                
     def draw(self):  
@@ -80,6 +92,10 @@ class Board:
             r.circle.setFill(color_rgb(0,0,150))
             r.circle.draw(self.win)
 
+        # draw UAV
+        self.uav.circle.setFill(color_rgb(150,0,0))
+        self.uav.circle.draw(self.win)
+
         self.win.setBackground(color_rgb(150, 150, 150))   # grey background
         #self.win.getMouse() # pause for click in self.window
 
@@ -97,28 +113,59 @@ class Board:
     # the primary method for running the simulation
     def run(self):
         self.draw()
-        while len(self.rsrC) > 0:   # while there are still roombas left, keep running
+        lastTime = self.boardTime.getTime()
+        while len(self.srC) > 0:   # while there are still roombas left, keep running
+            timeInterval = self.boardTime.getTime()-lastTime
+            lastTime = self.boardTime.getTime()
+            
             for r in self.rC:
                 if r.d == 1:        # if the roomba is dead, remove it
                     r.circle.undraw()
                     self.rC.remove(r)
+                    self.rCsrC.remove(r)
+            if self.uav.d == 1:     # remove dead UAV
+                self.uav.circle.undraw()
+
             cDetect = []                    # list of roombas pairs
-            for x in range(len(self.rC)):   # generates all possible unique pairs of roombas
-                d = range(x, len(self.rC))
+            for x in range(len(self.rCsrC)):   # generates all possible unique pairs of roombas
+                d = range(x, len(self.rCsrC))
                 e = [d.pop(0)] * len(d)
                 cDetect = cDetect + zip(e, d)
             for x in cDetect:
-                if self.collision(self.rC[x[0]].pos, self.rC[x[1]].pos): # if there is a collision, reverse directions of both roombas
-                    self.rC[x[0]].vel.update_angle(pi)
-                    self.rC[x[1]].vel.update_angle(pi)
-            for r in self.rsrC:  # draw updated roombas
-                r.circle.move(r.vel.x, r.vel.y)
+                if self.collision(self.rCsrC[x[0]].pos, self.rCsrC[x[1]].pos): # if there is a collision, reverse directions of both roombas
+                    if self.rCsrC[x[0]] in self.rC and self.rCsrC[x[0]].turning == False:
+                        self.rC[x[0]].flip()
+                    if self.rCsrC[x[1]] in self.rC and self.rCsrC[x[1]].turning == False:
+                        self.rC[x[1]].flip()
+            for r in self.rCsrC :  # draw updated roombas
+                # moves roombas with move function - uses less processing time
+                #r.circle.move(timeInterval*r.vel.x*30, timeInterval*r.vel.y*30)
+                
+                # moves roombas by drawing and undrawing - laggy
+                r.circle.undraw()
+                r.circle.draw(self.win)
+
                 r.step()
+                #Point(r.pos.x,r.pos.y).draw(self.win)   # traces roomba path - laggy
+            
+            # draw updated UAV
+            #self.uav.circle.move(timeInterval*self.uav.vel.x*30, timeInterval*self.uav.vel.y*30)
+            
+            self.uav.circle.undraw()
+            self.uav.circle.draw(self.win)
+            #Point(self.uav.pos.x,self.uav.pos.y).draw(self.win)
+            
+            self.uav.update(self.rC,self.srC)
+            self.uav.step()
+
+
+
+
             self.win.update()
         self.stop()                 # quit the simulation
 
     def stop(self):
         self.win.getMouse()
     
-myboard = Board(20, 20, 5, 4)
+myboard = Board(20, 20, 10, 4)
 myboard.run()
